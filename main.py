@@ -30,19 +30,27 @@ class ChatRequest(BaseModel):
 # Model routing constants
 HARD_KEYWORDS = [
     r"prove", r"derivative", r"integral", r"induction", r"np[-\s]?hard", r"big-?o", r"complexity",
-    r"dynamic programming", r"regex", r"sql", r"join", r"stack trace", r"panic", r"traceback", r"think hard"
+    r"dynamic programming", r"regex", r"sql", r"join", r"stack trace", r"panic", r"traceback", r"think hard",
+    r"proof", r"mathematical induction", r"recursion", r"algorithm", r"theorem", r"bukti", r"turunan", r"integral", r"induksi", r"np[-\s]?sulit", r"kompleksitas", r"pemrograman dinamis", r"jejak tumpukan", r"jejak kesalahan", r"jejak error", r"jejak", r"algoritma", r"teorema", r"persamaan", r"matematika", r"logika", r"berpikir keras", r"pikir keras", r"buktikan", r"soal sulit", r"tantangan", r"uji", r"uji coba", r"uji hipotesis"
 ]
 MEDIUM_KEYWORDS = [
-    r"explain", r"analyze", r"reasoning", r"difficult", r"challenge", r"debug", r"error", r"why"
+    r"explain", r"analyze", r"reasoning", r"difficult", r"challenge", r"debug", r"error", r"why", r"describe", r"clarify", r"investigate", r"how", r"apa itu", r"jelaskan", r"analisa", r"penjelasan", r"mengapa", r"kenapa", r"sulit", r"tantangan", r"perbaiki", r"kesalahan", r"masalah", r"solusi", r"langkah", r"cara", r"bagaimana", r"penyebab", r"penyelesaian"
 ]
 HARD_PATTERN = re.compile("|".join(HARD_KEYWORDS), re.IGNORECASE)
 MEDIUM_PATTERN = re.compile("|".join(MEDIUM_KEYWORDS), re.IGNORECASE)
 
 def select_model(content: str) -> str:
-    """Select Gemini model based on content complexity."""
-    if HARD_PATTERN.search(content):
+    """Select Gemini model based on weighted content complexity."""
+    score = 0
+    # Hard keywords: +5 each
+    score += 5 * len(HARD_PATTERN.findall(content))
+    # Medium keywords: +2 each
+    score += 2 * len(MEDIUM_PATTERN.findall(content))
+    # Question marks: +1 each
+    score += content.count('?')
+    if score >= 10:
         return "gemini-pro"
-    elif MEDIUM_PATTERN.search(content):
+    elif score >= 5:
         return "gemini-flash"
     else:
         return "gemini-flash-lite"
