@@ -1,6 +1,6 @@
 import os
 import re
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, types
 from pydantic import BaseModel
 from typing import Dict, List, Tuple
 import google.generativeai as genai
@@ -31,10 +31,15 @@ class ChatRequest(BaseModel):
 HARD_KEYWORDS = [
     r"prove", r"derivative", r"integral", r"induction", r"np[-\s]?hard", r"big-?o", r"complexity",
     r"dynamic programming", r"regex", r"sql", r"join", r"stack trace", r"panic", r"traceback", r"think hard",
-    r"proof", r"mathematical induction", r"recursion", r"algorithm", r"theorem", r"bukti", r"turunan", r"integral", r"induksi", r"np[-\s]?sulit", r"kompleksitas", r"pemrograman dinamis", r"jejak tumpukan", r"jejak kesalahan", r"jejak error", r"jejak", r"algoritma", r"teorema", r"persamaan", r"matematika", r"logika", r"berpikir keras", r"pikir keras", r"buktikan", r"soal sulit", r"tantangan", r"uji", r"uji coba", r"uji hipotesis"
+    r"proof", r"mathematical induction", r"recursion", r"algorithm", r"theorem", r"bukti", r"turunan", r"integral", r"induksi",
+    r"np[-\s]?sulit", r"kompleksitas", r"pemrograman dinamis", r"jejak tumpukan", r"jejak kesalahan", r"jejak error", r"jejak",
+    r"algoritma", r"teorema", r"persamaan", r"matematika", r"logika", r"berpikir keras", r"pikir keras", r"buktikan", r"soal sulit",
+    r"tantangan", r"uji", r"uji coba", r"uji hipotesis"
 ]
 MEDIUM_KEYWORDS = [
-    r"explain", r"analyze", r"reasoning", r"difficult", r"challenge", r"debug", r"error", r"why", r"describe", r"clarify", r"investigate", r"how", r"apa itu", r"jelaskan", r"analisa", r"penjelasan", r"mengapa", r"kenapa", r"sulit", r"tantangan", r"perbaiki", r"kesalahan", r"masalah", r"solusi", r"langkah", r"cara", r"bagaimana", r"penyebab", r"penyelesaian"
+    r"explain", r"analyze", r"reasoning", r"difficult", r"challenge", r"debug", r"error", r"why", r"describe", r"clarify", r"investigate",
+    r"how", r"apa itu", r"jelaskan", r"analisa", r"penjelasan", r"mengapa", r"kenapa", r"sulit", r"tantangan", r"perbaiki", r"kesalahan",
+    r"masalah", r"solusi", r"langkah", r"cara", r"bagaimana", r"penyebab", r"penyelesaian"
 ]
 HARD_PATTERN = re.compile("|".join(HARD_KEYWORDS), re.IGNORECASE)
 MEDIUM_PATTERN = re.compile("|".join(MEDIUM_KEYWORDS), re.IGNORECASE)
@@ -83,9 +88,11 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, str]:
 
         # Select model based on content complexity
         model_name = select_model(request.message.content)
-        model = genai.GenerativeModel(model_name)
-        response = model.generate_content(gemini_messages)
-        
+        model = genai.GenerativeModel(model_name, )
+        response = model.generate_content(gemini_messages, config=types.GenerateContentConfig(
+            system_instruction="You are a helpful assistant. Respond to the user's message in a clear and concise manner.",
+        ))
+
         # Add assistant's reply to history
         history.append(Message(role="assistant", content=response.text))
         return {"response": response.text, "title": chat_titles.get(key), "model": model_name}
