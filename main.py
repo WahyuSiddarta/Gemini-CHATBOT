@@ -69,6 +69,8 @@ def select_model(content: str, conversation: str) -> str:
         estimatedToken = client.models.count_tokens(model="gemini-2.5-flash-lite", contents=prompt)
     else:
         estimatedToken = client.models.count_tokens(conversation)
+        
+    # scoring base model routing
     if score >= 10 and estimatedToken > 3000:
         return "gemini-2.5-pro"
     elif score >= 5:
@@ -117,7 +119,7 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
         history.append(request.message)
 
         # Prepare prompt for Gemini API (latest format expects a single string)
-        # Limit to the last 20 messages (10 back-and-forth)
+        # Limit to the last 20 messages (10 back-and-forth) for quiker and limit token input
         limited_history = history[-20:]
         prompt = "You are a helpful assistant. Respond to the user's message in a clear and concise manner.\n"
         for m in limited_history:
@@ -155,5 +157,24 @@ def get_chat_history(user_id: str, chat_id: str) -> Dict[str, Any]:
     messages = [{"role": m.role, "content": m.content} for m in history]
     title = chat_titles.get(key, "")
     return {"title": title, "messages": messages}
+
+# Delete a specific chat conversation and title
+@app.delete("/user/{user_id}/chat/{chat_id}")
+def delete_chat(user_id: str, chat_id: str) -> Dict[str, str]:
+    """Delete a specific chat conversation and its title from memory."""
+    key = (user_id, chat_id)
+    
+    # Check if chat exists
+    if key not in conversations:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    
+    # Remove conversation history
+    del conversations[key]
+    
+    # Remove chat title if it exists
+    if key in chat_titles:
+        del chat_titles[key]
+    
+    return {"message": f"Chat {chat_id} for user {user_id} has been deleted successfully"}
 
 # running /Users/wahyu/Code/H8/data-scientist/final-project/.venv/bin/python -m uvicorn main:app --reload --port 8001
