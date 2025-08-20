@@ -47,7 +47,12 @@ MEDIUM_KEYWORDS = [
 HARD_PATTERN = re.compile("|".join(HARD_KEYWORDS), re.IGNORECASE)
 MEDIUM_PATTERN = re.compile("|".join(MEDIUM_KEYWORDS), re.IGNORECASE)
 
-def select_model(content: str) -> str:
+# simple model routing, but current method is not suitable for production
+# context on previous message maybe lost, potential solution for production
+# 1. distilation using higher model
+# 2. store message fact to make lower model smarter, also consistency check for lower model if answer is same as fact
+# 3. transform question into statement or smaller question to make lower model easier to process
+def select_model(content: str, conversation: str) -> str:
     """Select Gemini model based on weighted content complexity."""
     score = 0
     # Hard keywords: +5 each
@@ -56,7 +61,15 @@ def select_model(content: str) -> str:
     score += 2 * len(MEDIUM_PATTERN.findall(content))
     # Question marks: +1 each
     score += content.count('?')
-    if score >= 10:
+    # Convert conversation (list of Message) to a string prompt for token counting
+    if isinstance(conversation, list):
+        prompt = ""
+        for m in conversation:
+            prompt += f"{m.role}: {m.content}\n"
+        estimatedToken = client.models.count_tokens(model="gemini-2.5-flash-lite", contents=prompt)
+    else:
+        estimatedToken = client.models.count_tokens(conversation)
+    if score >= 10 and estimatedToken > 3000:
         return "gemini-2.5-pro"
     elif score >= 5:
         return "gemini-2.5-flash"
@@ -70,12 +83,19 @@ chat_titles: Dict[Tuple[str, str], str] = {}
 
 
 @app.post("/chat")
-def chat_endpoint(request: ChatRequest) -> Dict[str, str]:
+def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
     try:
         key = (request.user_id, request.chat_id)
         # Get or create conversation history
         history = conversations.setdefault(key, [])
-        
+        # Enforce total conversation limit
+        if len(history) >= 100:
+            return {
+                "response": "Conversation limit is ended. Please start a new chat.",
+                "title": chat_titles.get(key),
+                "model": None
+            }
+
         # Generate title for new conversation
         if key not in chat_titles and len(history) == 0 and request.message.role == "user":
             title_prompt = f"Generate a single, short, and concise title (max 5 words, no explanation) for this conversation: {request.message.content}"
@@ -92,17 +112,19 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, str]:
             words = first_line.split()
             concise_title = ' '.join(words[:5])
             chat_titles[key] = concise_title
-        
+
         # Append the new message
         history.append(request.message)
 
         # Prepare prompt for Gemini API (latest format expects a single string)
+        # Limit to the last 20 messages (10 back-and-forth)
+        limited_history = history[-20:]
         prompt = "You are a helpful assistant. Respond to the user's message in a clear and concise manner.\n"
-        for m in history:
+        for m in limited_history:
             prompt += f"{m.role}: {m.content}\n"
 
         # Select model based on content complexity
-        model_name = select_model(request.message.content)
+        model_name = select_model(request.message.content, history)
         response = client.models.generate_content(
             model=model_name,
             contents=prompt
@@ -111,7 +133,7 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, str]:
         # Add assistant's reply to history
         assistant_reply = response.candidates[0].content.parts[0].text
         history.append(Message(role="assistant", content=assistant_reply))
-        return {"response": assistant_reply, "title": chat_titles.get(key), "model": model_name}
+        return {"response": {"role": "assistant", "content": assistant_reply}, "title": chat_titles.get(key), "model": model_name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -107,3 +107,4 @@ poetry.lock
 
 # MacOS
 .DS_Store
+.github
