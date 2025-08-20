@@ -197,7 +197,7 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
                 types.Tool(code_execution=types.ToolCodeExecution),
                 types.Tool(google_search=types.GoogleSearch())
             ],
-            system_instruction="You are a helpful assistant. Use Google Search if needed to ground your answers and cite sources with [number] where relevant. Use Code execution tool only for code-related queries and complex math, do not use it for general questions or if using search."
+            system_instruction="You are a helpful assistant. Use Google Search if needed to ground your answers and cite sources with [number] where relevant. Use Code execution tool only for code-related queries and complex math, do not show internal tool in response if it being used"
         )
 
         # Select model based on content complexity
@@ -216,16 +216,28 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
             if hasattr(candidate, 'content') and candidate.content and hasattr(candidate.content, 'parts'):
                 parts = candidate.content.parts
                 if parts and len(parts) > 0:
-                    # Process all parts according to Gemini documentation
                     content_parts = []
                     for part in parts:
-                        if part.text is not None:
+                        # Always keep natural language
+                        if getattr(part, "text", None):
                             content_parts.append(part.text)
-                        if hasattr(part, 'executable_code') and part.executable_code is not None:
-                            content_parts.append(f"<code>{part.executable_code.code}</code>")
-                        if hasattr(part, 'code_execution_result') and part.code_execution_result is not None:
-                            content_parts.append(f"<code>Output: {part.code_execution_result.output}</code>")
-                    assistant_reply = "".join(content_parts)
+
+                        # Show code only if Gemini intended it as part of the answer
+                        if getattr(part, "executable_code", None):
+                            if candidate.finish_reason == "STOP":  # user-facing
+                                content_parts.append(f"<code>{part.executable_code.code}</code>")
+                            # else: skip (tool-only, like search)
+
+                        # Show code execution result only if it’s relevant
+                        if getattr(part, "code_execution_result", None):
+                            if part.code_execution_result.output:
+                                if candidate.finish_reason == "STOP":
+                                    content_parts.append(
+                                        f"<code>Output: {part.code_execution_result.output}</code>"
+                                    )
+                                # else skip (internal tool use)
+
+            assistant_reply = "".join(content_parts)
         
         if not assistant_reply:
             assistant_reply = "I apologize, but I couldn't generate a proper response. Please try again."
