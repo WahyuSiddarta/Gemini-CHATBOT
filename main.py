@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing import Dict, List, Tuple, Any
 from google import genai
 from google.genai import types
-
+import re as _re
 # Load environment variables from .env file
 load_dotenv()
 
@@ -57,7 +57,7 @@ HARD_KEYWORDS = [
     r"dynamic programming", r"regex", r"sql",  r"stack trace", r"panic", r"traceback",  r"recursion", r"algorithm", r"theorem", r"bukti", r"turunan", r"integral", r"induksi",
     r"np[-\s]?sulit", r"kompleksitas", r"pemrograman dinamis", r"jejak tumpukan", r"jejak kesalahan", r"jejak error", r"jejak",
     r"algoritma", r"teorema", r"persamaan", r"matematika", r"logika", r"berpikir keras", r"pikir keras", r"buktikan", r"soal sulit",
-    r"tantangan", r"uji", r"uji coba", r"uji hipotesis"
+    r"tantangan", r"uji", r"uji coba", r"uji hipotesis", r"prima", r"prime"
 ]
 MEDIUM_KEYWORDS = [
     r"apa itu", r"jelaskan", r"analisa", r"penjelasan", r"mengapa", r"kenapa", r"sulit", r"tantangan", r"perbaiki", r"kesalahan",
@@ -102,6 +102,30 @@ conversations: Dict[Tuple[str, str], List[Message]] = {}
 # In-memory chat titles: {(user_id, chat_id): str}
 chat_titles: Dict[Tuple[str, str], str] = {}
 
+def wrap_code_blocks(text):
+    if not isinstance(text, str):
+        text = str(text) if text is not None else ""
+    # Handle triple backtick code blocks (with or without language)
+    text = _re.sub(r"```([a-zA-Z0-9]*)\n([\s\S]*?)```", lambda m: f"<code>{m.group(2).strip()}</code>", text)
+    # Handle indented code blocks (4 spaces or tab)
+    lines = text.split('\n')
+    in_code = False
+    code_lines = []
+    result_lines = []
+    for line in lines:
+        if (line.startswith('    ') or line.startswith('\t')):
+            code_lines.append(line.lstrip())
+            in_code = True
+        else:
+            if in_code:
+                result_lines.append(f"<code>{'\n'.join(code_lines)}</code>")
+                code_lines = []
+                in_code = False
+            result_lines.append(line)
+    if in_code:
+        result_lines.append(f"<code>{'\n'.join(code_lines)}</code>")
+    return '\n'.join(result_lines)
+        
 def add_citations(response):
     text = ""
     grounding_metadata = getattr(response.candidates[0], "grounding_metadata", None)
@@ -168,10 +192,12 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
         for m in limited_history:
             prompt += f"{m.role}: {m.content}\n"
        
-        grounding_tool = types.Tool(google_search=types.GoogleSearch())
         config = types.GenerateContentConfig(
-            tools=[grounding_tool],
-            system_instruction="You are a helpful assistant. Use Google Search if needed to ground your answers and cite sources with [number] where relevant."
+            tools=[
+                types.Tool(code_execution=types.ToolCodeExecution),
+                types.Tool(google_search=types.GoogleSearch())
+            ],
+            system_instruction="You are a helpful assistant. Use Google Search if needed to ground your answers and cite sources with [number] where relevant. Use Code execution tool only for code-related queries and complex math, do not use it for general questions or if using search."
         )
 
         # Select model based on content complexity
@@ -183,7 +209,32 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
         )
 
         # Add assistant's reply to history
-        assistant_reply = response.candidates[0].content.parts[0].text
+        # Safely extract text from response, handling different response structures
+        assistant_reply = ""
+        if response.candidates and len(response.candidates) > 0:
+            candidate = response.candidates[0]
+            if hasattr(candidate, 'content') and candidate.content and hasattr(candidate.content, 'parts'):
+                parts = candidate.content.parts
+                if parts and len(parts) > 0:
+                    # Process all parts according to Gemini documentation
+                    content_parts = []
+                    for part in parts:
+                        if part.text is not None:
+                            content_parts.append(part.text)
+                        if hasattr(part, 'executable_code') and part.executable_code is not None:
+                            content_parts.append(f"<code>{part.executable_code.code}</code>")
+                        if hasattr(part, 'code_execution_result') and part.code_execution_result is not None:
+                            content_parts.append(f"<code>Output: {part.code_execution_result.output}</code>")
+                    assistant_reply = "".join(content_parts)
+        
+        if not assistant_reply:
+            assistant_reply = "I apologize, but I couldn't generate a proper response. Please try again."
+
+        # Wrap all code blocks in <code>...</code> tags
+        
+        
+
+        assistant_reply = wrap_code_blocks(assistant_reply)
         history.append(Message(role="assistant", content=assistant_reply))
         return {
             "response": {"role": "assistant", "content": assistant_reply},
