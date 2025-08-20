@@ -5,7 +5,6 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Dict, List, Tuple, Any
 from google import genai
-from google.genai import types
 
 
 # Load environment variables from .env file
@@ -19,12 +18,13 @@ HTTP_STATUS_INTERNAL_ERROR = 500
 # CHAT LIMIT
 MAX_CHAT_HISTORY = 20  # Number of messages to keep in context
 MAX_TOTAL_CONVERSATION = 100  # Max messages per chat
-MODEL_TOP_TIER_THRESHOLD = 10
-MODEL_MEDIUM_TIER_THRESHOLD = 5
+MODEL_TOP_TIER_THRESHOLD = 15
+MODEL_MEDIUM_TIER_THRESHOLD = 8
 
 # MESSAGE LIMITS
 TOKEN_THRESHOLD_PRO = 3000
-WEIGHT_MEDIUM = 2
+WEIGHT_SMALL = 2
+WEIGHT_MEDIUM = 3
 WEIGHT_HARD = 5
 
 app = FastAPI()
@@ -71,13 +71,13 @@ MEDIUM_PATTERN = re.compile("|".join(MEDIUM_KEYWORDS), re.IGNORECASE)
 # 3. transform question into statement or smaller question to make lower model easier to process
 def select_model(content: str, conversation: str) -> str:
     """Select Gemini model based on weighted content complexity."""
-    score = 0
+    score = 1  # Start with a base score of 1
     # Hard keywords: +5 each
     score += WEIGHT_HARD * len(HARD_PATTERN.findall(content))
-    # Medium keywords: +2 each
+    # Medium keywords: +3 each
     score += WEIGHT_MEDIUM * len(MEDIUM_PATTERN.findall(content))
-    # Question marks: +1 each
-    score += content.count('?')
+    # Question marks: +2 each
+    score += WEIGHT_SMALL * content.count('?')
     # Convert conversation (list of Message) to a string prompt for token counting
     if isinstance(conversation, list):
         prompt = ""

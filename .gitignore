@@ -109,4 +109,5 @@ poetry.lock
 .DS_Store
 .github
 
-__pycache__
+.__pycache__/
+main.cpython-*.pyc
