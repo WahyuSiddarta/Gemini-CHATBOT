@@ -10,6 +10,23 @@ from google.genai import types
 
 # Load environment variables from .env file
 load_dotenv()
+
+# === Constants ===
+# HTTP STATUS
+HTTP_STATUS_NOT_FOUND = 404
+HTTP_STATUS_INTERNAL_ERROR = 500
+
+# CHAT LIMIT
+MAX_CHAT_HISTORY = 20  # Number of messages to keep in context
+MAX_TOTAL_CONVERSATION = 100  # Max messages per chat
+MODEL_TOP_TIER_THRESHOLD = 10
+MODEL_MEDIUM_TIER_THRESHOLD = 5
+
+# MESSAGE LIMITS
+TOKEN_THRESHOLD_PRO = 3000
+WEIGHT_MEDIUM = 2
+WEIGHT_HARD = 5
+
 app = FastAPI()
 
 # Set up Gemini API key from environment variable
@@ -56,9 +73,9 @@ def select_model(content: str, conversation: str) -> str:
     """Select Gemini model based on weighted content complexity."""
     score = 0
     # Hard keywords: +5 each
-    score += 5 * len(HARD_PATTERN.findall(content))
+    score += WEIGHT_HARD * len(HARD_PATTERN.findall(content))
     # Medium keywords: +2 each
-    score += 2 * len(MEDIUM_PATTERN.findall(content))
+    score += WEIGHT_MEDIUM * len(MEDIUM_PATTERN.findall(content))
     # Question marks: +1 each
     score += content.count('?')
     # Convert conversation (list of Message) to a string prompt for token counting
@@ -71,9 +88,9 @@ def select_model(content: str, conversation: str) -> str:
         estimatedToken = client.models.count_tokens(conversation)
         
     # scoring base model routing
-    if score >= 10 and estimatedToken > 3000:
+    if score >= MODEL_TOP_TIER_THRESHOLD and estimatedToken > TOKEN_THRESHOLD_PRO:
         return "gemini-2.5-pro"
-    elif score >= 5:
+    elif score >= MODEL_MEDIUM_TIER_THRESHOLD:
         return "gemini-2.5-flash"
     else:
         return "gemini-2.5-flash-lite"
@@ -91,7 +108,7 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
         # Get or create conversation history
         history = conversations.setdefault(key, [])
         # Enforce total conversation limit
-        if len(history) >= 100:
+        if len(history) >= MAX_TOTAL_CONVERSATION:
             return {
                 "response": "Conversation limit is ended. Please start a new chat.",
                 "title": chat_titles.get(key),
@@ -119,8 +136,8 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
         history.append(request.message)
 
         # Prepare prompt for Gemini API (latest format expects a single string)
-        # Limit to the last 20 messages (10 back-and-forth) for quiker and limit token input
-        limited_history = history[-20:]
+        # Limit to the last MAX_CHAT_HISTORY messages (10 back-and-forth) for quicker and limit token input
+        limited_history = history[-MAX_CHAT_HISTORY:]
         prompt = "You are a helpful assistant. Respond to the user's message in a clear and concise manner.\n"
         for m in limited_history:
             prompt += f"{m.role}: {m.content}\n"
@@ -137,7 +154,7 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
         history.append(Message(role="assistant", content=assistant_reply))
         return {"response": {"role": "assistant", "content": assistant_reply}, "title": chat_titles.get(key), "model": model_name}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=HTTP_STATUS_INTERNAL_ERROR, detail=str(e))
 
 
 # Get all chat_ids and titles for a user
@@ -166,7 +183,7 @@ def delete_chat(user_id: str, chat_id: str) -> Dict[str, str]:
     
     # Check if chat exists
     if key not in conversations:
-        raise HTTPException(status_code=404, detail="Chat not found")
+        raise HTTPException(status_code=HTTP_STATUS_NOT_FOUND, detail="Chat not found")
     
     # Remove conversation history
     del conversations[key]

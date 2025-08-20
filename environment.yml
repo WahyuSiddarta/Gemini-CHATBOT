@@ -1,0 +1,13 @@
+name: chatbot-env
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - fastapi
+  - uvicorn
+  - python-dotenv
+  - pydantic
+  - pip
+  - pip:
+    - google-generativeai==0.3.2
