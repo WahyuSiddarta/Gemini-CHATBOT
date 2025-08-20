@@ -2,10 +2,11 @@ import os
 from dotenv import load_dotenv
 import re
 from fastapi import FastAPI, HTTPException
+import concurrent.futures
 from pydantic import BaseModel
 from typing import Dict, List, Tuple, Any
 from google import genai
-
+from google.genai import types
 
 # Load environment variables from .env file
 load_dotenv()
@@ -28,6 +29,7 @@ WEIGHT_MEDIUM = 3
 WEIGHT_HARD = 5
 
 app = FastAPI()
+
 
 # Set up Gemini API key from environment variable
 gemini_api_key = os.getenv("GEMINI_API_KEY")
@@ -100,10 +102,34 @@ conversations: Dict[Tuple[str, str], List[Message]] = {}
 # In-memory chat titles: {(user_id, chat_id): str}
 chat_titles: Dict[Tuple[str, str], str] = {}
 
+def add_citations(response):
+    text = ""
+    grounding_metadata = getattr(response.candidates[0], "grounding_metadata", None)
+    if not grounding_metadata:
+        return text
+    supports = getattr(grounding_metadata, "grounding_supports", None)
+    chunks = getattr(grounding_metadata, "grounding_chunks", None)
+    if not supports or not chunks:
+        return text
+
+    # Collect all unique citations (index, url)
+    citation_map = {}
+    for i, chunk in enumerate(chunks):
+        if getattr(chunk, "web", None) and getattr(chunk.web, "uri", None):
+            citation_map[i + 1] = chunk.web.uri
+
+    # Build bibliography at the end
+    if citation_map:
+        bib = "\n\n Referensi:\n"
+        for idx, url in sorted(citation_map.items()):
+            bib += f"[{idx}] {url}\n"
+        return  bib.strip()
+    else:
+        return ""
 
 @app.post("/chat")
 def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
-    try:
+    def process_chat():
         key = (request.user_id, request.chat_id)
         # Get or create conversation history
         history = conversations.setdefault(key, [])
@@ -138,21 +164,46 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
         # Prepare prompt for Gemini API (latest format expects a single string)
         # Limit to the last MAX_CHAT_HISTORY messages (10 back-and-forth) for quicker and limit token input
         limited_history = history[-MAX_CHAT_HISTORY:]
-        prompt = "You are a helpful assistant. Respond to the user's message in a clear and concise manner.\n"
+        prompt = ""
         for m in limited_history:
             prompt += f"{m.role}: {m.content}\n"
+       
+        grounding_tool = types.Tool(google_search=types.GoogleSearch())
+        config = types.GenerateContentConfig(
+            tools=[grounding_tool],
+            system_instruction="You are a helpful assistant. Use Google Search if needed to ground your answers and cite sources with [number] where relevant."
+        )
 
         # Select model based on content complexity
         model_name = select_model(request.message.content, history)
         response = client.models.generate_content(
             model=model_name,
-            contents=prompt
+            contents=prompt,
+            config=config,
         )
 
         # Add assistant's reply to history
         assistant_reply = response.candidates[0].content.parts[0].text
         history.append(Message(role="assistant", content=assistant_reply))
-        return {"response": {"role": "assistant", "content": assistant_reply}, "title": chat_titles.get(key), "model": model_name}
+        return {
+            "response": {"role": "assistant", "content": assistant_reply},
+            "title": chat_titles.get(key),
+            "model": model_name,
+            "citation": add_citations(response)
+        }
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(process_chat)
+            try:
+                result = future.result(timeout=25)
+                return result
+            except concurrent.futures.TimeoutError:
+                return {
+                    "response": "Query failed: process exceeded 25 seconds.",
+                    "title": None,
+                    "model": None
+                }
     except Exception as e:
         raise HTTPException(status_code=HTTP_STATUS_INTERNAL_ERROR, detail=str(e))
 
