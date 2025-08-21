@@ -19,8 +19,8 @@ HTTP_STATUS_INTERNAL_ERROR = 500
 # CHAT LIMIT
 MAX_CHAT_HISTORY = 20  # Number of messages to keep in context
 MAX_TOTAL_CONVERSATION = 100  # Max messages per chat
-MODEL_TOP_TIER_THRESHOLD = 15
-MODEL_MEDIUM_TIER_THRESHOLD = 8
+MODEL_TOP_TIER_THRESHOLD = 10
+MODEL_MEDIUM_TIER_THRESHOLD = 7
 
 # MESSAGE LIMITS
 TOKEN_THRESHOLD_PRO = 3000
@@ -53,7 +53,7 @@ class ChatRequest(BaseModel):
 
 # Model routing constants
 HARD_KEYWORDS = [
-    r"derivative", r"integral",  r"big-?o", r"complexity",
+    r"derivative", r"integral",  r"big-?o", r"complexity", r"algorithm", r"algoritma",r"mathematical",
     r"dynamic programming", r"regex", r"sql",  r"stack trace", r"panic", r"traceback",  r"recursion", r"algorithm", r"theorem", r"bukti", r"turunan", r"integral", r"induksi",
     r"np[-\s]?sulit", r"kompleksitas", r"pemrograman dinamis", r"jejak tumpukan", r"jejak kesalahan", r"jejak error", r"jejak",
     r"algoritma", r"teorema", r"persamaan", r"matematika", r"logika", r"berpikir keras", r"pikir keras", r"buktikan", r"soal sulit",
@@ -61,7 +61,7 @@ HARD_KEYWORDS = [
 ]
 MEDIUM_KEYWORDS = [
     r"apa itu", r"jelaskan", r"analisa", r"penjelasan", r"mengapa", r"kenapa", r"sulit", r"tantangan", r"perbaiki", r"kesalahan",
-    r"masalah", r"solusi", r"langkah", r"cara", r"bagaimana", r"penyebab", r"penyelesaian"
+    r"masalah", r"solusi", r"langkah", r"cara", r"bagaimana", r"penyebab", r"penyelesaian" 
 ]
 HARD_PATTERN = re.compile("|".join(HARD_KEYWORDS), re.IGNORECASE)
 MEDIUM_PATTERN = re.compile("|".join(MEDIUM_KEYWORDS), re.IGNORECASE)
@@ -80,19 +80,27 @@ def select_model(content: str, conversation: str) -> str:
     score += WEIGHT_MEDIUM * len(MEDIUM_PATTERN.findall(content))
     # Question marks: +2 each
     score += WEIGHT_SMALL * content.count('?')
+    
     # Convert conversation (list of Message) to a string prompt for token counting
-    if isinstance(conversation, list):
-        prompt = ""
-        for m in conversation:
-            prompt += f"{m.role}: {m.content}\n"
-        estimatedToken = client.models.count_tokens(model="gemini-2.5-flash-lite", contents=prompt)
-    else:
-        estimatedToken = client.models.count_tokens(conversation)
-        
+    # weighting for pro model is disabled because of potential token limit issues
+    # sometimes, query get {'error': {'code': 500, 'message': 'An internal error has occurred. Please retry or report in https://developers.generativeai.google/guide/troubleshooting', 'status': 'INTERNAL'}} 
+    # if isinstance(conversation, list):
+    #     prompt = ""
+    #     for m in conversation:
+    #         prompt += f"{m.role}: {m.content}\n"
+    #     estimatedToken = client.models.count_tokens(model="gemini-2.5-flash-lite", contents=prompt)
+    # else:
+    #     estimatedToken = client.models.count_tokens(conversation)
+    # token_count = estimatedToken.total_tokens if hasattr(estimatedToken, 'total_tokens') else int(estimatedToken)
+    
     # scoring base model routing
-    if score >= MODEL_TOP_TIER_THRESHOLD and estimatedToken > TOKEN_THRESHOLD_PRO:
-        return "gemini-2.5-pro"
-    elif score >= MODEL_MEDIUM_TIER_THRESHOLD:
+    # if score >= MODEL_TOP_TIER_THRESHOLD or token_count > TOKEN_THRESHOLD_PRO:
+    #     return "gemini-2.5-pro"
+    # elif score >= MODEL_MEDIUM_TIER_THRESHOLD:
+    #     return "gemini-2.5-flash"
+    # else:
+    #     return "gemini-2.5-flash-lite"
+    if score >= MODEL_MEDIUM_TIER_THRESHOLD:
         return "gemini-2.5-flash"
     else:
         return "gemini-2.5-flash-lite"
@@ -106,7 +114,7 @@ def wrap_code_blocks(text):
     if not isinstance(text, str):
         text = str(text) if text is not None else ""
     # Handle triple backtick code blocks (with or without language)
-    text = _re.sub(r"```([a-zA-Z0-9]*)\n([\s\S]*?)```", lambda m: f"<code>{m.group(2).strip()}</code>", text)
+    text = _re.sub(r"```([a-zA-Z0-9]*)\n([\s\S]*?)```", lambda m: f"{m.group(2).strip()}", text)
     # Handle indented code blocks (4 spaces or tab)
     lines = text.split('\n')
     in_code = False
@@ -118,12 +126,12 @@ def wrap_code_blocks(text):
             in_code = True
         else:
             if in_code:
-                result_lines.append(f"<code>{'\n'.join(code_lines)}</code>")
+                result_lines.append(f"{'\n'.join(code_lines)}")
                 code_lines = []
                 in_code = False
             result_lines.append(line)
     if in_code:
-        result_lines.append(f"<code>{'\n'.join(code_lines)}</code>")
+        result_lines.append(f"{'\n'.join(code_lines)}")
     return '\n'.join(result_lines)
         
 def add_citations(response):
@@ -211,12 +219,16 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
         # Add assistant's reply to history
         # Safely extract text from response, handling different response structures
         assistant_reply = ""
+        content_parts = []
+        debug = ""
         if response.candidates and len(response.candidates) > 0:
+            debug += "1"
             candidate = response.candidates[0]
             if hasattr(candidate, 'content') and candidate.content and hasattr(candidate.content, 'parts'):
+                debug += "2"
                 parts = candidate.content.parts
                 if parts and len(parts) > 0:
-                    content_parts = []
+                    debug += "3"
                     for part in parts:
                         # Always keep natural language
                         if getattr(part, "text", None):
@@ -225,7 +237,7 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
                         # Show code only if Gemini intended it as part of the answer
                         if getattr(part, "executable_code", None):
                             if candidate.finish_reason == "STOP":  # user-facing
-                                content_parts.append(f"<code>{part.executable_code.code}</code>")
+                                content_parts.append(f"{part.executable_code.code}")
                             # else: skip (tool-only, like search)
 
                         # Show code execution result only if it’s relevant
@@ -233,14 +245,14 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
                             if part.code_execution_result.output:
                                 if candidate.finish_reason == "STOP":
                                     content_parts.append(
-                                        f"<code>Output: {part.code_execution_result.output}</code>"
+                                        f"Output: {part.code_execution_result.output}"
                                     )
                                 # else skip (internal tool use)
 
-            assistant_reply = "".join(content_parts)
+        assistant_reply = "".join(content_parts)
         
         if not assistant_reply:
-            assistant_reply = "I apologize, but I couldn't generate a proper response. Please try again."
+            assistant_reply = "I apologize, but I couldn't generate a proper response. Please try again.".join(debug) 
 
         # Wrap all code blocks in <code>...</code> tags
         
